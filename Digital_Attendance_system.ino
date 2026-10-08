@@ -1,23 +1,25 @@
+#include <WiFi.h>
+#include <WebServer.h>
 #include <SPI.h>
 #include <MFRC522.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <time.h>
 
-// =================================================
-// RFID PINS
-// =================================================
+// ================= WIFI =================
+const char* WIFI_SSID = "YOUR_WIFI_NAME";
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 
-#define SS_PIN 5
-#define RST_PIN 27
+// ================= PINS =================
+#define SS_PIN       5
+#define RST_PIN      27
+#define BUZZER_PIN   25
 
-MFRC522 rfid(SS_PIN, RST_PIN);
+#define OLED_SDA     21
+#define OLED_SCL     22
 
-
-// =================================================
-// OLED
-// =================================================
-
+// ================= OLED =================
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 
@@ -28,89 +30,43 @@ Adafruit_SSD1306 display(
   -1
 );
 
+// ================= RFID =================
+MFRC522 rfid(SS_PIN, RST_PIN);
 
-// =================================================
-// BUZZER
-// =================================================
+// ================= WEB SERVER =================
+WebServer server(80);
 
-#define BUZZER_PIN 25
+// ================= MINIMUM STAY =================
+const unsigned long MINIMUM_STAY_SECONDS = 60;
 
+// ================= USER STRUCTURE =================
+struct User {
+  String uid;
+  String name;
 
-// =================================================
-// RFID UIDs
-// =================================================
+  bool inside;
 
-// Nandjni
-byte uidNandjni[] = {
-  0x4E, 0x74, 0x8F, 0x04
+  time_t entryTime;
+  time_t exitTime;
 };
 
-// Srijeet
-byte uidSrijeet[] = {
-  0xBA, 0xE6, 0x69, 0x05
+User users[] = {
+  {"4E748F04", "Nandini", false, 0, 0},
+  {"BAE66905", "Srijeet", false, 0, 0},
+  {"495CDAB7", "Deepra", false, 0, 0},
+  {"290256B7", "Ahan", false, 0, 0}
 };
 
-// Deepra
-byte uidDeepra[] = {
-  0x49, 0x5C, 0xDA, 0xB7
-};
+const int USER_COUNT = sizeof(users) / sizeof(users[0]);
 
-// Ahan
-byte uidAhan[] = {
-  0x29, 0x02, 0x56, 0xB7
-};
-
-
-// =================================================
-// INSIDE / OUTSIDE STATUS
-// =================================================
-
-// false = outside
-// true  = inside
-
-bool nandjniInside = false;
-bool srijeetInside = false;
-bool deepraInside  = false;
-bool ahanInside    = false;
-
-
-// =================================================
-// COMPARE RFID UID
-// =================================================
-
-bool checkUID(byte *scannedUID, byte *storedUID, byte length) {
-
-  for (byte i = 0; i < length; i++) {
-
-    if (scannedUID[i] != storedUID[i]) {
-      return false;
-    }
-
-  }
-
-  return true;
-}
-
-
-// =================================================
-// BUZZER FUNCTIONS
-// =================================================
-
-// One beep = ENTRY
-
+// ================= BUZZER =================
 void entryBeep() {
-
   tone(BUZZER_PIN, 2000);
   delay(250);
   noTone(BUZZER_PIN);
-
 }
 
-
-// Two beeps = EXIT
-
 void exitBeep() {
-
   tone(BUZZER_PIN, 2000);
   delay(200);
   noTone(BUZZER_PIN);
@@ -120,457 +76,458 @@ void exitBeep() {
   tone(BUZZER_PIN, 2000);
   delay(200);
   noTone(BUZZER_PIN);
-
 }
-
-
-// Three beeps = UNKNOWN CARD
 
 void deniedBeep() {
-
   for (int i = 0; i < 3; i++) {
-
     tone(BUZZER_PIN, 1500);
     delay(150);
-
     noTone(BUZZER_PIN);
     delay(150);
+  }
+}
 
+// ================= OLED =================
+void showMessage(String line1, String line2 = "") {
+
+  display.clearDisplay();
+
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println(line1);
+
+  display.setTextSize(2);
+  display.setCursor(0, 20);
+  display.println(line2);
+
+  display.display();
+}
+
+void showClock() {
+
+  struct tm timeinfo;
+
+  if (!getLocalTime(&timeinfo)) {
+
+    display.clearDisplay();
+
+    display.setTextColor(SSD1306_WHITE);
+
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.println("Attendance System");
+
+    display.setTextSize(2);
+    display.setCursor(10, 25);
+    display.println("--:--:--");
+
+    display.display();
+
+    return;
   }
 
-}
+  char timeString[10];
 
-
-// =================================================
-// OLED READY SCREEN
-// =================================================
-
-void showReadyScreen() {
-
-  display.clearDisplay();
-
-  display.setTextColor(SSD1306_WHITE);
-
-  display.setTextSize(2);
-  display.setCursor(15, 5);
-  display.println("RFID");
-
-  display.setTextSize(1);
-  display.setCursor(20, 35);
-  display.println("Attendance");
-
-  display.setCursor(30, 50);
-  display.println("Scan Card");
-
-  display.display();
-
-}
-
-
-// =================================================
-// OLED ENTRY SCREEN
-// =================================================
-
-void showEntry(String name) {
+  strftime(
+    timeString,
+    sizeof(timeString),
+    "%H:%M:%S",
+    &timeinfo
+  );
 
   display.clearDisplay();
 
   display.setTextColor(SSD1306_WHITE);
 
   display.setTextSize(1);
-  display.setCursor(25, 3);
-  display.println("ENTRY RECORDED");
+  display.setCursor(0, 0);
+  display.println("DIGITAL ATTENDANCE");
 
   display.setTextSize(2);
   display.setCursor(10, 22);
-  display.println(name);
+  display.println(timeString);
 
   display.setTextSize(1);
-  display.setCursor(35, 50);
-  display.println("WELCOME");
+  display.setCursor(20, 50);
+  display.println("Scan RFID Card");
 
   display.display();
-
 }
 
+// ================= FIND USER =================
+int findUser(String uid) {
 
-// =================================================
-// OLED EXIT SCREEN
-// =================================================
+  for (int i = 0; i < USER_COUNT; i++) {
 
-void showExit(String name) {
+    if (users[i].uid == uid) {
+      return i;
+    }
+  }
 
-  display.clearDisplay();
-
-  display.setTextColor(SSD1306_WHITE);
-
-  display.setTextSize(1);
-  display.setCursor(25, 2);
-  display.println("EXIT RECORDED");
-
-  display.setTextSize(2);
-  display.setCursor(10, 22);
-  display.println(name);
-
-  display.setTextSize(1);
-  display.setCursor(25, 50);
-  display.println("ATTENDANCE OK");
-
-  display.display();
-
+  return -1;
 }
 
+// ================= GET RFID UID =================
+String getUID() {
 
-// =================================================
-// OLED DENIED SCREEN
-// =================================================
+  String uid = "";
 
-void showDenied() {
+  for (byte i = 0; i < rfid.uid.size; i++) {
 
-  display.clearDisplay();
+    if (rfid.uid.uidByte[i] < 0x10) {
+      uid += "0";
+    }
 
-  display.setTextColor(SSD1306_WHITE);
+    uid += String(
+      rfid.uid.uidByte[i],
+      HEX
+    );
+  }
 
-  display.setTextSize(1);
-  display.setCursor(30, 5);
-  display.println("ACCESS DENIED");
+  uid.toUpperCase();
 
-  display.setTextSize(2);
-  display.setCursor(20, 25);
-  display.println("UNKNOWN");
-
-  display.setTextSize(1);
-  display.setCursor(40, 50);
-  display.println("CARD");
-
-  display.display();
-
+  return uid;
 }
 
+// ================= TIME FORMAT =================
+String formatTime(time_t timestamp) {
 
-// =================================================
-// SETUP
-// =================================================
+  if (timestamp == 0) {
+    return "--";
+  }
 
+  struct tm timeinfo;
+
+  localtime_r(&timestamp, &timeinfo);
+
+  char buffer[20];
+
+  strftime(
+    buffer,
+    sizeof(buffer),
+    "%d-%m-%Y %H:%M:%S",
+    &timeinfo
+  );
+
+  return String(buffer);
+}
+
+// ================= RFID PROCESS =================
+void processRFID() {
+
+  if (!rfid.PICC_IsNewCardPresent()) {
+    return;
+  }
+
+  if (!rfid.PICC_ReadCardSerial()) {
+    return;
+  }
+
+  String uid = getUID();
+
+  Serial.println();
+  Serial.println("RFID Detected");
+  Serial.print("UID: ");
+  Serial.println(uid);
+
+  int userIndex = findUser(uid);
+
+  // ================= UNKNOWN CARD =================
+  if (userIndex == -1) {
+
+    Serial.println("ACCESS DENIED");
+
+    showMessage("ACCESS DENIED", "Unknown");
+
+    deniedBeep();
+
+    delay(1500);
+
+    showClock();
+
+    rfid.PICC_HaltA();
+    rfid.PCD_StopCrypto1();
+
+    return;
+  }
+
+  User &user = users[userIndex];
+
+  // ================= ENTRY =================
+  if (!user.inside) {
+
+    user.inside = true;
+
+    user.entryTime = time(nullptr);
+    user.exitTime = 0;
+
+    Serial.println("ACCESS GRANTED");
+    Serial.print("Name: ");
+    Serial.println(user.name);
+
+    Serial.println("ENTRY RECORDED");
+    Serial.print("Entry Time: ");
+    Serial.println(formatTime(user.entryTime));
+
+    showMessage(
+      "WELCOME",
+      user.name
+    );
+
+    entryBeep();
+
+    delay(1500);
+  }
+
+  // ================= EXIT =================
+  else {
+
+    time_t currentTime = time(nullptr);
+
+    unsigned long stayTime =
+      currentTime - user.entryTime;
+
+    // Less than 1 minute
+    if (stayTime < MINIMUM_STAY_SECONDS) {
+
+      unsigned long remaining =
+        MINIMUM_STAY_SECONDS - stayTime;
+
+      Serial.println("EXIT BLOCKED");
+
+      Serial.print("Please stay ");
+      Serial.print(remaining);
+      Serial.println(" more seconds.");
+
+      showMessage(
+        "EXIT BLOCKED",
+        String(remaining) + " sec"
+      );
+
+      deniedBeep();
+
+      delay(1500);
+    }
+
+    // More than 1 minute
+    else {
+
+      user.inside = false;
+
+      user.exitTime = currentTime;
+
+      Serial.println("EXIT ALLOWED");
+
+      Serial.print("Name: ");
+      Serial.println(user.name);
+
+      Serial.print("Exit Time: ");
+      Serial.println(formatTime(user.exitTime));
+
+      Serial.println("ATTENDANCE RECORDED");
+
+      showMessage(
+        "GOODBYE",
+        user.name
+      );
+
+      exitBeep();
+
+      delay(1500);
+    }
+  }
+
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+
+  showClock();
+}
+
+// ================= API =================
+void handleAPI() {
+
+  String json = "{";
+
+  json += "\"currentTime\":\"";
+  json += formatTime(time(nullptr));
+  json += "\",";
+
+  json += "\"users\":[";
+
+  for (int i = 0; i < USER_COUNT; i++) {
+
+    json += "{";
+
+    json += "\"name\":\"";
+    json += users[i].name;
+    json += "\",";
+
+    json += "\"uid\":\"";
+    json += users[i].uid;
+    json += "\",";
+
+    json += "\"inside\":";
+    json += users[i].inside ? "true" : "false";
+    json += ",";
+
+    json += "\"entryTime\":\"";
+    json += formatTime(users[i].entryTime);
+    json += "\",";
+
+    json += "\"exitTime\":\"";
+    json += formatTime(users[i].exitTime);
+    json += "\"";
+
+    json += "}";
+
+    if (i < USER_COUNT - 1) {
+      json += ",";
+    }
+  }
+
+  json += "]";
+
+  json += "}";
+
+  server.send(
+    200,
+    "application/json",
+    json
+  );
+}
+
+// ================= WEB SERVER =================
+void handleRoot() {
+
+  server.send(
+    200,
+    "text/plain",
+    "ESP32 Attendance API is running."
+  );
+}
+
+// ================= SETUP =================
 void setup() {
 
-  // Serial Monitor
   Serial.begin(115200);
 
-
-  // Buzzer
   pinMode(BUZZER_PIN, OUTPUT);
-  noTone(BUZZER_PIN);
-
 
   // OLED
-  Wire.begin(21, 22);
+  Wire.begin(
+    OLED_SDA,
+    OLED_SCL
+  );
 
   if (!display.begin(
         SSD1306_SWITCHCAPVCC,
         0x3C
       )) {
 
-    Serial.println("OLED NOT FOUND!");
-
-    while (1);
+    Serial.println("OLED failed!");
   }
 
+  showMessage(
+    "Starting...",
+    "Please wait"
+  );
 
   // RFID
   SPI.begin();
 
   rfid.PCD_Init();
 
+  Serial.println("RFID initialized.");
 
-  // Initial OLED screen
-  showReadyScreen();
+  // ================= WIFI =================
+  WiFi.begin(
+    WIFI_SSID,
+    WIFI_PASSWORD
+  );
 
+  Serial.print("Connecting WiFi");
 
-  // Serial information
-  Serial.println();
-  Serial.println("==============================");
-  Serial.println(" RFID ATTENDANCE SYSTEM");
-  Serial.println("==============================");
-  Serial.println();
+  unsigned long wifiStart = millis();
 
-  Serial.println("System Ready.");
-  Serial.println("Scan RFID card...");
-  Serial.println();
+  while (
+    WiFi.status() != WL_CONNECTED &&
+    millis() - wifiStart < 15000
+  ) {
 
-}
+    delay(500);
 
-
-// =================================================
-// MAIN LOOP
-// =================================================
-
-void loop() {
-
-  // Check for new RFID card
-  if (!rfid.PICC_IsNewCardPresent()) {
-    return;
+    Serial.print(".");
   }
 
+  Serial.println();
 
-  // Read RFID card
-  if (!rfid.PICC_ReadCardSerial()) {
-    return;
-  }
+  if (WiFi.status() == WL_CONNECTED) {
 
+    Serial.println("WiFi Connected!");
 
-  // =================================================
-  // PRINT UID
-  // =================================================
+    Serial.print("ESP32 IP Address: ");
+    Serial.println(WiFi.localIP());
 
-  Serial.print("Card UID: ");
-
-  for (byte i = 0; i < rfid.uid.size; i++) {
-
-    if (rfid.uid.uidByte[i] < 0x10) {
-      Serial.print("0");
-    }
-
-    Serial.print(
-      rfid.uid.uidByte[i],
-      HEX
+    configTime(
+      19800,
+      0,
+      "pool.ntp.org",
+      "time.nist.gov"
     );
 
-    Serial.print(" ");
+    server.on(
+      "/",
+      handleRoot
+    );
+
+    server.on(
+      "/api/data",
+      handleAPI
+    );
+
+    server.begin();
+
+    Serial.println(
+      "Dashboard API started."
+    );
   }
-
-  Serial.println();
-
-
-  // =================================================
-  // NANDJNI
-  // =================================================
-
-  if (
-    rfid.uid.size == 4 &&
-    checkUID(
-      rfid.uid.uidByte,
-      uidNandjni,
-      4
-    )
-  ) {
-
-    Serial.println("Person: Nandjni");
-
-
-    // ---------------------------------------------
-    // Nandjni is OUTSIDE
-    // Therefore this is ENTRY
-    // ---------------------------------------------
-
-    if (nandjniInside == false) {
-
-      nandjniInside = true;
-
-      Serial.println("STATUS: ENTRY");
-      Serial.println("Nandjni is now INSIDE");
-      Serial.println("Attendance NOT recorded yet.");
-
-      showEntry("Nandjni");
-
-      entryBeep();
-
-    }
-
-
-    // ---------------------------------------------
-    // Nandjni is INSIDE
-    // Therefore this is EXIT
-    // ---------------------------------------------
-
-    else {
-
-      nandjniInside = false;
-
-      Serial.println("STATUS: EXIT");
-      Serial.println("Nandjni has LEFT");
-      Serial.println("ATTENDANCE RECORDED!");
-
-      showExit("Nandjni");
-
-      exitBeep();
-
-    }
-
-  }
-
-
-  // =================================================
-  // SRIJEET
-  // =================================================
-
-  else if (
-    rfid.uid.size == 4 &&
-    checkUID(
-      rfid.uid.uidByte,
-      uidSrijeet,
-      4
-    )
-  ) {
-
-    Serial.println("Person: Srijeet");
-
-
-    if (srijeetInside == false) {
-
-      srijeetInside = true;
-
-      Serial.println("STATUS: ENTRY");
-      Serial.println("Srijeet is now INSIDE");
-      Serial.println("Attendance NOT recorded yet.");
-
-      showEntry("Srijeet");
-
-      entryBeep();
-
-    }
-
-    else {
-
-      srijeetInside = false;
-
-      Serial.println("STATUS: EXIT");
-      Serial.println("Srijeet has LEFT");
-      Serial.println("ATTENDANCE RECORDED!");
-
-      showExit("Srijeet");
-
-      exitBeep();
-
-    }
-
-  }
-
-
-  // =================================================
-  // DEEPRA
-  // =================================================
-
-  else if (
-    rfid.uid.size == 4 &&
-    checkUID(
-      rfid.uid.uidByte,
-      uidDeepra,
-      4
-    )
-  ) {
-
-    Serial.println("Person: Deepra");
-
-
-    if (deepraInside == false) {
-
-      deepraInside = true;
-
-      Serial.println("STATUS: ENTRY");
-      Serial.println("Deepra is now INSIDE");
-      Serial.println("Attendance NOT recorded yet.");
-
-      showEntry("Deepra");
-
-      entryBeep();
-
-    }
-
-    else {
-
-      deepraInside = false;
-
-      Serial.println("STATUS: EXIT");
-      Serial.println("Deepra has LEFT");
-      Serial.println("ATTENDANCE RECORDED!");
-
-      showExit("Deepra");
-
-      exitBeep();
-
-    }
-
-  }
-
-
-  // =================================================
-  // AHAN
-  // =================================================
-
-  else if (
-    rfid.uid.size == 4 &&
-    checkUID(
-      rfid.uid.uidByte,
-      uidAhan,
-      4
-    )
-  ) {
-
-    Serial.println("Person: Ahan");
-
-
-    if (ahanInside == false) {
-
-      ahanInside = true;
-
-      Serial.println("STATUS: ENTRY");
-      Serial.println("Ahan is now INSIDE");
-      Serial.println("Attendance NOT recorded yet.");
-
-      showEntry("Ahan");
-
-      entryBeep();
-
-    }
-
-    else {
-
-      ahanInside = false;
-
-      Serial.println("STATUS: EXIT");
-      Serial.println("Ahan has LEFT");
-      Serial.println("ATTENDANCE RECORDED!");
-
-      showExit("Ahan");
-
-      exitBeep();
-
-    }
-
-  }
-
-
-  // =================================================
-  // UNKNOWN RFID CARD
-  // =================================================
 
   else {
 
-    Serial.println("UNKNOWN CARD!");
-    Serial.println("ACCESS DENIED");
+    Serial.println(
+      "WiFi not connected."
+    );
 
-    showDenied();
-
-    deniedBeep();
-
+    Serial.println(
+      "Running RFID offline."
+    );
   }
 
+  showClock();
+}
 
-  // Stop RFID communication
-  rfid.PICC_HaltA();
-  rfid.PCD_StopCrypto1();
+// ================= LOOP =================
+void loop() {
 
+  // Web server
+  if (WiFi.status() == WL_CONNECTED) {
+    server.handleClient();
+  }
 
-  // Keep result on OLED
-  delay(2500);
+  // RFID
+  processRFID();
 
+  // Clock refresh
+  static unsigned long lastClockUpdate = 0;
 
-  // Return to ready screen
-  showReadyScreen();
+  if (millis() - lastClockUpdate >= 1000) {
 
+    lastClockUpdate = millis();
 
-  // Small delay to prevent immediate double reading
-  delay(500);
+    showClock();
+  }
 
+  delay(50);
 }
